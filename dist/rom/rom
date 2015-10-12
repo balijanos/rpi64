@@ -1,0 +1,803 @@
+------------------------------------------------------------------------
+--
+-- ROM V1.3 (V1D)
+--
+------------------------------------------------------------------------
+
+_ROM_VERSION = "1.3"
+_ROM_VERSTR = "V1D"
+
+package.path=package.path..";./lua;./engine/lua/?.lua;"
+package.cpath=package.cpath..";./dll;./*.so;./engine/?.so;./engine/?.dll;"
+
+require "lfs"
+require "zip"
+
+-- rom constants
+local ROMSRC="rom"
+local TABSPACE=4
+local CMDSEP=" "
+local ROMSTORE = "rom/"
+local DISKSTORE = "disk/"
+local CURDISKID = "#"
+local RAMDISKID = "#"
+local TEMPDIRID = "_TMP_"
+local CDROMEXT = {"zip","ZIP"}
+local ROOT = lfs.currentdir().."/"
+local AUTOPRG = "autorun.lua"
+-- system globals
+_UPDATE_ROOT = ROOT
+_SHELL_ROOT = ROOT.."shell/"
+AUTORUN = true
+LASTERROR = ""
+
+-- update path again
+package.path=package.path..ROOT.."engine/lua/?.lua"
+package.cpath=package.cpath..ROOT.."/engine/?.so;"..ROOT.."/engine/?.dll"
+
+-- jump tables for commands
+local COMMANDS = {}	-- command = func() pairs
+
+-- MESSAGES
+local OK = "OK"
+local SYNTAX_ERROR = "SYNTAX ERROR"
+local NODEF = "ERROR %s NOT DEFINED"
+local CNOTFOUND = "COMMAND NOT FOUND"
+local EOPEN = "ERROR OPEN %s"
+local FILENOTFOUND = "FILE NOT FOUND"
+local DEVNOTREADY = "ERROR DEVICE NOT READY"
+local DEVNOTFOUND = "ERROR DEVICE NOT FOUND"
+local LISTNOTFOUND = "ERROR DISK OR DEVICE NOT FOUND"
+local FILEWRITEERROR = "FILE WRITE ERROR"
+local CANTHELP = "NO HELP AVAILABLE"
+
+-- rom keywords
+local KEYWORDS = {
+		-- EDITOR --
+        "function","local","require",
+		"while","for","end","in","do","break","repaat",
+        "if","then","else","elseif","pairs","return","print",
+		"and","or","not","nil","true","false",
+        "math.","table.","string.","os.","io.",
+		"mouse.","keyboard.","bit.","zip.","lfs.","audio.","spl.",		
+}
+
+for k,v in pairs(KEYWORDS) do
+	INTP_addkeyword(v)
+end
+
+-- common funcs
+
+local function unquote(s)
+	if type(s)=="string" and ((string.sub(s,-1)=="\"" and string.sub(s,1,1)=="\"") or 
+		(string.sub(s,-1)=="'" and string.sub(s,1,1)=="'")) then
+		return string.sub(s, 2, -2)
+	end
+	return s
+end
+
+local function parsecmd(s)
+	s = s .. CMDSEP        	-- ending separator
+	local t = {}        	-- table to collect fields
+	local fieldstart = 1
+	repeat
+	-- next field is quoted? (start with `"'?)
+	if string.find(s, '^"', fieldstart) then
+	  local a, c
+	  local i  = fieldstart
+	  repeat
+		-- find closing quote
+		a, i, c = string.find(s, '"("?)', i+1)
+	  until c ~= '"'    -- quote not followed by quote?
+	  if not i then 
+		 -- error('unmatched "') 
+		 return nil
+	  end
+	  -- local f = string.sub(s, fieldstart+1, i-1)
+	  -- table.insert(t, (string.gsub(f, '""', '"')))
+	  local send = string.find(s,CMDSEP,i)
+	  table.insert(t, string.sub(s, fieldstart, send-1))
+	  fieldstart = send + 1
+	else                -- unquoted; find next comma
+	  local nexti = string.find(s, CMDSEP, fieldstart)
+	  table.insert(t, string.sub(s, fieldstart, nexti-1))
+	  fieldstart = nexti + 1
+	end
+	until fieldstart > string.len(s)
+	return t
+end
+
+local function rom_eval(str)		
+	if type(str)=="string" and ((string.sub(str,-1)=="\"" and string.sub(str,1,1)=="\"") or 
+		(string.sub(str,-1)=="'" and string.sub(str,1,1)=="'")) then
+		return string.sub(str, 2, -2)
+	end
+	local ret, evalok = nil
+	if type(str)~="table" and type(str)~="function" and type(str)~="nil" then
+		ret, evalok = INTP_eval(str)
+	end
+	if evalok==nil then			
+		return nil
+	end
+	return ret
+end
+
+-----------------------------
+-- command interpreter funcs
+-----------------------------
+-- PRINT
+local function rom_print(args)
+	if args == nil then
+		return 0, SYNTAX_ERROR
+	end
+	if (args[2]=="\r") then
+		table.remove(args,2)
+	end
+	local frmstr=""
+	for k,v in pairs(args) do
+		if k>1 then
+			local str = nil
+			local tail = ""
+			local estr = nil
+			if k<table.getn(args) then
+				tail = string.rep(" ",TABSPACE)
+			end
+			estr = v
+			str = rom_eval(estr)			
+			if str == nil then
+				return 0, string.format(NODEF,tostring(estr)) 
+			end
+			INTP_errlog(tostring(str))
+			frmstr = frmstr .. tostring(str) .. tail			
+		end
+	end	
+	INTP_print(frmstr)
+	return 1, nil
+end
+
+-- RESET
+local function rom_reset(args)
+	lfs.chdir(ROOT)
+	INTP_reset(args[2] or ROMSRC)
+	return 1, nil -- no screen output
+end
+
+-- CLEAR
+local function rom_clearscreen(args)
+	INTP_clear()
+	return 1, nil -- no screen output
+end
+
+-- OPEN R/O archive to RAMDISK
+local function rom_copyall(azip, targetdir, reqfname)		
+	if (azip==nil) then
+		return 0,nil
+	end			
+	local zfile, err = zip.open(azip, CDROMEXT)
+	if (zfile==nil) then
+		return 0,nil
+	end	
+	local list = {}
+	for file in zfile:files() do
+		local str = reqfname or ""
+		if reqfname and ((string.sub(str,-1)=="\"" and string.sub(str,1,1)=="\"") or 
+		   (string.sub(str,-1)=="'" and string.sub(str,1,1)=="'")) then
+		   reqfname = string.sub(str,2,-2)
+		end
+		if reqfname and file.filename==reqfname then
+			table.insert(list,file)
+		elseif reqfname==nil then 
+			table.insert(list,file)
+		end
+	end
+	zfile:close()
+	for count, file in pairs(list) do
+		local z, err = zip.openfile(azip.."/"..file.filename, CDROMEXT)
+		if z then 
+			local b = z:read("*all")
+			local n = z:seek("end")
+			z:close()
+			n = INTP_copy(targetdir.."/"..file.filename,b,n)
+			if n==nil or n==0 then 
+				lfs.mkdir(targetdir.."/"..file.filename)
+			end
+		else
+			return 0, string.format(azip) 
+		end		
+	end	
+	return 1, OK
+end
+
+-- AUTOSTART
+local function autostart()
+	if AUTORUN==true then
+		local f = loadfile(AUTOPRG)				
+		if type(f)=="function" then
+			local ret = INTP_load(AUTOPRG)		
+			if ret then
+				f()
+				INTP_run() 				
+			end
+		end
+	end
+end
+
+local function list_devices()
+	local oldpath = lfs.currentdir()
+	local devlist = ""
+	lfs.chdir(ROOT..DISKSTORE)
+	for file in lfs.dir(".") do
+        if file ~= "." and file ~= ".." then
+            local attr = lfs.attributes (file)
+			if type(attr)=="table" then
+				if attr.mode == "directory" then
+					INTP_print ("[ "..file.." ]")
+					-- devlist = devlist .. file .. " "
+				end			
+			end
+        end
+    end
+	for file in lfs.dir(".") do
+        if file ~= "." and file ~= ".." then
+            local attr = lfs.attributes (file)
+			if type(attr)=="table" then				
+				if attr.mode ~= "directory" and string.find(string.upper(file),".ZIP")==string.len(file)-3 then
+					INTP_print ("< "..string.sub(file,1,string.find(string.upper(file),".ZIP")-1).." >")
+					-- devlist = devlist .. string.sub(file,1,string.find(string.upper(file),".ZIP")-1) .. " "
+				end
+			end
+        end
+    end
+	lfs.chdir(oldpath)
+	-- print(devlist)
+	return 1, OK
+end
+
+-- OPEN
+local function rom_open(args)
+	if args[2]==nil then
+		return list_devices()
+	end
+	local oldpath=lfs.currentdir()
+	lfs.chdir(ROOT)
+	local ret = INTP_open(DISKSTORE..args[2])
+	if ret then		
+		lfs.chdir(DISKSTORE..args[2])
+		CURDISKID = args[2]
+		autostart()
+		return 1, OK
+	else
+		lfs.chdir(oldpath)
+	end	
+	lfs.chdir(ROOT)
+	-- if not an directory, try open as zipfile
+	local s = nil
+	ret, s = rom_copyall(DISKSTORE..args[2],DISKSTORE..RAMDISKID,args[3]) -- third param is filename for load function
+	if ret==1 then 
+		INTP_open(DISKSTORE..RAMDISKID)
+		lfs.chdir(DISKSTORE..RAMDISKID)
+		CURDISKID = RAMDISKID
+		autostart()
+		os.remove(AUTOPRG) -- remove from ramdisk avoid further autostart
+		return ret, OK
+	else
+		lfs.chdir(oldpath)
+	end	
+	return 0, string.format(EOPEN,args[2])
+end
+
+local function rom_format_do(args)	
+	if args[2]==nil then
+		return 0,SYNTAX_ERROR
+	end
+	local path = args[2]
+	local oldpath = lfs.currentdir()
+	lfs.chdir(path)
+	for file in lfs.dir(".") do
+        if file ~= "." and file ~= ".." then
+            local attr = lfs.attributes(file)
+			if type(attr)=="table" then
+				if attr.mode == "directory" then					
+					rom_format_do({nil,file})					
+					lfs.rmdir(file)
+				else
+					os.remove(file)
+				end
+			else				
+				lfs.chdir(oldpath)
+				return 0, SYNTAX_ERROR 
+			end
+        end
+    end
+	lfs.chdir(oldpath)
+	return 1, OK
+end
+
+local function rom_format(args)	
+	if args[2]==nil or args[3]~=nil then
+		return 0,SYNTAX_ERROR
+	end
+	if type(tonumber(args[2])) == "number" or args[2]==RAMDISKID then
+		local oldpath = lfs.currentdir()
+		lfs.chdir(ROOT)	
+		lfs.chdir(DISKSTORE)
+		lfs.mkdir(args[2]) -- to be safe	
+		rom_format_do({nil,args[2]})		
+		lfs.chdir(oldpath)	
+		return 1, OK
+	else
+		return 0, DEVNOTFOUND
+	end
+end
+
+-- LIST
+local function rom_list(args)		
+	local argpath = "."
+	local oldpath=lfs.currentdir()
+	local curdisk = "DISK:"..CURDISKID
+	if args[2] then
+		lfs.chdir(ROOT)		
+		local ret = INTP_open(DISKSTORE..args[2])	
+		if ret then		
+			lfs.chdir(DISKSTORE..args[2])
+			curdisk = "DISK:"..args[2]
+		else
+			-- if not an directory, try list as zipfile
+			lfs.chdir(ROOT)	
+			lfs.chdir(DISKSTORE)
+			lfs.mkdir(TEMPDIRID) -- tempdir
+			lfs.chdir(ROOT)
+			local s = nil			
+			ret, s = rom_copyall(DISKSTORE..args[2],DISKSTORE..TEMPDIRID)
+			lfs.chdir(DISKSTORE..TEMPDIRID)
+			
+			if ret==1 then 
+				curdisk = "DEVICE:"..args[2]
+			else
+				lfs.chdir(oldpath)
+				return 0,LISTNOTFOUND
+			end					
+		end	
+	end
+	if args[2] and args[2]==RAMDISKID or args[2]==nil and CURDISKID==RAMDISKID then
+		curdisk = "RAMDISK"
+	end
+	INTP_print ("["..string.upper(curdisk).."]")
+	for file in lfs.dir(argpath) do
+        if file ~= "." and file ~= ".." then
+            local attr = lfs.attributes (file)
+			if type(attr)=="table" then
+				if attr.mode == "directory" then
+					INTP_print (file.."  is  directory")
+				end			
+			end
+        end
+    end
+	for file in lfs.dir(argpath) do
+        if file ~= "." and file ~= ".." then
+            local attr = lfs.attributes (file)
+			if type(attr)=="table" then
+				if attr.mode ~= "directory" then
+					INTP_print (file.."  is  "..attr.size.." bytes")
+				end
+			end
+        end
+    end
+	
+	-- remove tempdir
+	lfs.chdir(ROOT)	
+	lfs.chdir(DISKSTORE)
+	lfs.mkdir(TEMPDIRID) -- to be safe	
+	rom_format_do({nil,TEMPDIRID})		
+	lfs.rmdir(TEMPDIRID) 
+	lfs.chdir(oldpath)
+	return 1, OK
+end
+
+local function rom_load(args)
+	if args==nil or args[2]==nil then
+		return 0,SYNTAX_ERROR
+	end	
+	local str = unquote(args[2])
+	if type(str)=="string" then
+		local ret = INTP_load(str)		
+		if ret then
+			return 1, OK
+		else
+			return 0, FILENOTFOUND
+		end
+	end
+	return 0, SYNTAX_ERROR
+end
+
+local function rom_save(args)
+	if args[2]==nil then
+		return 0,SYNTAX_ERROR
+	end
+	local str = unquote(args[2])
+	if type(str)=="string" then
+		local ret = INTP_save(str)
+		if ret then
+			return 1, OK
+		else
+			return 0,FILEWRITEERROR
+		end
+	end
+	return 0, SYNTAX_ERROR
+end
+
+local function rom_new(args)
+	local ret = INTP_new()
+	setup=nil
+	cleanup=nil
+	draw=nil
+	collectgarbage()
+	return 1, OK
+end
+
+local function copyfiles(targetpath)
+	local oldpath = lfs.currentdir()
+    for file in lfs.dir(".") do
+        if file ~= "." and file ~= ".." then
+            local attr = lfs.attributes(file)
+			if type(attr)=="table" then
+				if attr.mode == "directory" then	
+					lfs.mkdir(targetpath.."/"..file) -- to be safe
+					lfs.chdir(file)
+					if copyfiles(targetpath.."/"..file)==nil then
+						lfs.chdir(oldpath)
+						return
+					end		
+					lfs.chdir(oldpath)
+				else				
+					if INTP_filecopy(file,targetpath.."/"..file)==nil then
+						lfs.chdir(oldpath)
+						return
+					end
+				end
+			end
+        end
+    end
+	lfs.chdir(oldpath)
+	return 1
+end
+
+--
+-- ROM COPY
+--
+-- copies entire disk content or one single file to another disk
+--
+local function rom_copy(args)
+	if args[2]==nil then
+		return 0,SYNTAX_ERROR
+	end	
+	if type(tonumber(args[2])) ~= "number" and args[2]~=RAMDISKID and not INTP_open(DISKSTORE..args[2]) then
+		return 0,DEVNOTFOUND
+	end
+	if args[3] then		
+		local str = unquote(args[3])
+		if type(str)~="string" then
+			return 0,FILENOTFOUND
+		end		
+		if INTP_filecopy(str,ROOT..DISKSTORE..args[2].."/"..str)==nil then			
+			return 0,FILEWRITEERROR
+		end
+		return 1, OK
+	else		
+		-- copy entire disk		
+		if copyfiles(ROOT..DISKSTORE..args[2]) then
+			return 1, OK
+		else
+			return 0, FILEWRITEERROR
+		end
+	end
+	return 0, SYNTAX_ERROR
+end
+
+local function rom_delete(args)
+	if args[2]==nil then
+		return 0,SYNTAX_ERROR
+	end
+	local str = unquote(args[2])
+	if type(str)=="string" then
+		local ret = INTP_delete(str)
+		if ret then
+			return 1, OK
+		else
+			return 0,FILENOTFOUND
+		end
+	end
+	return 0, SYNTAX_ERROR
+end
+
+local function rom_run(args)
+	if args[2] and args[2]~="-" then
+		local n,err = rom_load(args)
+		if n==0 then
+			return n,err
+		end
+	end
+	arg = {}
+	for k,v in pairs(args) do
+		if (k>2) then
+			table.insert(arg,v)
+		elseif (k==2) then
+			table.insert(arg,unquote(v))
+		end
+	end
+	
+	setup=nil
+	cleanup=nil
+	draw=nil
+	collectgarbage()
+	
+	INTP_run()
+	return 1, OK
+end
+
+local function rom_notimplemented(args)
+	return 0, SYNTAX_ERROR
+end
+
+--------------------------
+-- SHELL
+--------------------------
+function sh_exec(filename, args) 
+	local temparg = { }
+	for k,v in pairs(args) do
+		if (k>1) then
+			table.insert(temparg,unquote(v))
+		end
+	end
+    local env = setmetatable({ arg = temparg }, 
+       { __index = _G, __newindex = _G })
+	local f = loadfile(_SHELL_ROOT..filename)
+	if f then 
+		return 1, setfenv(f, env)(args) 
+	else
+		return 0, string.format(EOPEN,filename)
+	end
+end 
+
+local function rom_shell(args)
+	if (args[2]) then		
+		return sh_exec(args[2],args)
+	else
+		local oldpath=lfs.currentdir()
+		print("SHELL scripts:")
+		print("--------------")
+		lfs.chdir(_SHELL_ROOT)
+		for file in lfs.dir(".") do
+			if file ~= "." and file ~= ".." then
+				local attr = lfs.attributes (file)
+				if type(attr)=="table" then
+					if attr.mode ~= "directory" then
+						print (file)
+					end
+				else
+					-- 
+				end
+			end
+		end
+		lfs.chdir(oldpath)
+		return 1
+	end
+	return 0, SYNTAX_ERROR
+end
+
+--------------------------
+-- HELP SYSTEM
+--------------------------
+local COMMANDHELP = {}
+COMMANDHELP["PRINT"] = 	{[[print <params>]],[[      prints given params]],[[      print a==1 2+3 "hello world"]]}
+COMMANDHELP["RESET"] = 	{[[reset [rom] ]],[[      resets computer]], [[      reset -- soft reset]], [[      reset romname -- switch to another ROM]]}
+COMMANDHELP["CLEAR"] = 	{[[clear]],[[      clears screen]]}
+COMMANDHELP["OPEN"] = 	{[[open <device>]],[[     opens device]],[[     open 0 -- opens disk0]],[[     open cd0 -- opens cd0 named r/o archive]]}
+COMMANDHELP["LIST"] = 	{[[list [disk or device] ]],[[     lists disk or device]],[[     list -- lists current disk]],[[     list 0 -- lists disk 0]],[[     list demos -- lists device named 'demos']]}
+COMMANDHELP["LOAD"] = 	{[[load <filename>]],[[     loads program]],[[     load "myprogram.lua"]]}
+COMMANDHELP["SAVE"] = 	{[[save <filename>]],[[     saves current program]],[[     save "myprogram.lua"]]}
+COMMANDHELP["COPY"] = 	{[[copy <todisk [filename]>]],[[     copies disk or single file]],[[     copy 1 "myprogram.lua"]]}
+COMMANDHELP["DELETE"] = {[[delete <filename>]],[[       deletes file from disk]],[[       delete "myprogram.lua"]]}
+COMMANDHELP["RUN"] = 	{[[run [filename] ]],[[    run -- runs current program]],[[    run <filename> -- loads and runs program from disk]]}
+COMMANDHELP["FORMAT"] = {[[format [disk] ]],[[       recreates i/o device]],[[       format # -- clears ramdisk]],[[       format 1 -- destroys and creates disk one]]}
+COMMANDHELP["EXIT"] = 	{[[exit]],[[    exit -- stops rpi64]] }
+COMMANDHELP["NEW"] = 	{[[new]],[[    new -- clears editor]] }
+COMMANDHELP["SHELL"] = 	{[[shell]],[[    shell <scriptname> <params> -- executes shell script]] }
+COMMANDHELP["HELP"] = 	{[[help <command>]]}
+
+local function rom_help(args)
+	if (args[2]) then
+		local f = COMMANDHELP[string.upper(args[2])]
+		if f then
+			for k,v in pairs(f) do
+				INTP_print (v)
+			end			
+			return 1, nil
+		else
+			return 0, CANTHELP
+		end
+	end
+	INTP_print("KEYWORDS:")
+	for k,v in pairs(COMMANDHELP) do
+		INTP_print("  "..k)
+	end
+	INTP_print("press 'ALT + h' for quickhelp...")
+	return 1, nil
+end
+
+COMMANDS["PRINT"] = rom_print
+COMMANDS["RESET"] = rom_reset
+COMMANDS["CLEAR"] = rom_clearscreen
+COMMANDS["OPEN"] = rom_open
+COMMANDS["LIST"] = rom_list
+COMMANDS["LOAD"] = rom_load
+COMMANDS["SAVE"] = rom_save
+COMMANDS["COPY"] = rom_copy
+COMMANDS["DELETE"] = rom_delete
+COMMANDS["RUN"] = rom_run
+COMMANDS["FORMAT"] = rom_format
+COMMANDS["EXIT"] = INTP_quit
+COMMANDS["HELP"] = rom_help
+COMMANDS["NEW"] = rom_new
+COMMANDS["SH"] = rom_shell
+COMMANDS["SHELL"] = rom_shell
+
+--------------------------
+-- Disable some os funcs
+--------------------------
+os.execute=nil
+os.exit=nil
+os.rename=nil
+--------------------------
+-- define PRINT function
+--------------------------
+function print(...)
+	local t = {"PRINT"}	
+	for k,v in pairs(arg) do
+		if type(v)=="string" then
+			table.insert(t,"\""..v.."\"")
+		else
+			table.insert(t,v)
+		end
+	end
+	table.remove(t)	
+	rom_print(t)
+end
+
+--------------------------
+-- define INPUT function
+--------------------------
+function input()	
+	return INTP_input()
+end
+
+---------------------------------
+-- ENTRY POINT
+---------------------------------
+function interpret(command)
+	INTP_errlog(command or "")
+	local cmd = parsecmd(command or "")
+	if type(cmd)~="table" or cmd==nil or table.getn(cmd)==0 then return 0,CNOTFOUND end -- NO COMMAND
+	local func = nil
+	func = COMMANDS[string.upper(cmd[1])]
+	if func == nil then 
+		local ret, evalok = INTP_ieval(command)
+		INTP_errlog(tostring(ret).." "..tostring(evalok).." : "..command)
+		if evalok==nil then
+			return 0,SYNTAX_ERROR
+		end	
+		return 1,ret
+	end 
+	return func(cmd)
+end
+
+function quickcmd(key,line)
+	if key==nil or key<1 then return 1 end
+	local qc = string.char(key)
+	local ret = 1
+	local msg = nil
+	if qc >= "0" and qc <="9" then
+		print("OPEN "..qc)
+		_,qc = rom_open{qc,qc}
+		print(qc)
+	elseif qc == "e" then
+		if LASTERROR and LASTERROR~="" then		
+			print(LASTERROR)
+		end
+	elseif qc == "d" then
+		print("LIST")
+		ret, msg = rom_list{}
+	elseif qc == "r" then				
+		qc = nil
+		if line then
+			local n,m = string.find(line, "  is  ")
+			if n then 
+				qc = "\""..string.sub(line, 1, n-1).."\""
+			end
+		end
+		print("RUN "..(qc or ""))
+		ret, msg = rom_run{qc,qc}
+	elseif qc == "l" then				
+		qc = nil
+		if line then
+			local n,m = string.find(line, "  is  ")
+			if n then 
+				qc = "\""..string.sub(line, 1, n-1).."\""
+			end
+		end
+		print("LOAD "..(qc or ""))
+		ret, msg = rom_load{qc,qc}
+	elseif qc == "c" then
+		rom_clearscreen{}
+	elseif qc == "n" then
+		rom_new{}		
+	elseif qc == "h" then
+		print("QUICK COMMANDS (ALT+)")
+		print("  0..9", "OPEN DISK")
+		print("  C   ", "CLEAR SCREEN")
+		print("  D   ", "LIST ACTIVE DISK")
+		print("  E   ", "PRINT LASTERROR")
+		print("  L   ", "LOAD [AT CURSOR]")
+		print("  R   ", "RUN [AT CURSOR]")
+		print("  N   ", "NEW")
+	end
+	return ret, msg
+end
+
+---------------------------------
+-- BOOT (rom reset)
+---------------------------------
+
+-- CONFIG --
+if (_VERSION ~= nil) and (_VERSION > "1.2") then
+	RPI_EDITOR = 1
+	RPI_SHELL = 2
+	RPI_FRAME = 3
+	RPI_FONT = 4
+	RPI_EDITOR_CURSOR = 5
+	RPI_SHELL_CURSOR = 6
+
+	HL_NORMAL = 1
+	HL_ERROR = 2
+	HL_COMMENT = 3
+	HL_KEYWORD = 4
+	HL_STRING = 5
+	HL_NUMBER = 6
+	HL_FUNCDEF = 7
+	HL_LIB = 8
+
+	setsyscolor(RPI_EDITOR,0,0,0)
+	setsyscolor(RPI_SHELL,66,66,231)
+	setsyscolor(RPI_FRAME,165,165,255)
+	setsyscolor(RPI_FONT,240,240,192,255)
+	setsyscolor(RPI_EDITOR_CURSOR,245,245,255,128)
+	setsyscolor(RPI_SHELL_CURSOR,165,165,255,128)
+
+	-- default alpha is 255
+	sethlcolor(HL_NORMAL,165,165,255)	-- HL_NORMAL_COLOR
+	sethlcolor(HL_ERROR,255,0,0)		-- HL_ERROR_COLOR
+	sethlcolor(HL_COMMENT,180,180,0)	-- HL_COMMENT_COLOR
+	sethlcolor(HL_KEYWORD,50,255,50)	-- HL_KEYWORD_COLOR
+	sethlcolor(HL_STRING,0,255,255)		-- HL_STRING_COLOR
+	sethlcolor(HL_NUMBER,225,100,100)	-- HL_NUMBER_COLOR
+	sethlcolor(HL_FUNCDEF,255,255,255)	-- HL_FUNCDEF_COLOR
+	sethlcolor(HL_LIB,200,100,200)		-- HL_LIB_COLOR
+end
+sh_exec("config",{})
+
+-- READY --
+INTP_print("---------------- "..string.char(165).."-64 ".. _VERSION .." ".._ROM_VERSTR.." ---------------")
+INTP_print("© BRAINDEAD SOFTWARE INC. ALL RIGHTS RESERVED")
+INTP_print("---------------------------------------------")
+collectgarbage("collect")
+INTP_print("  "..(collectgarbage("count")*1024).." bytes used")
+INTP_print("")
+
+if (_VERSION == nil) or (_VERSION < "1.3") then
+	INTP_print("WARNING: THIS ROM REQUIRES ENGINE VERSION 1.2 or HIGHER!")
+end
+
+rom_format({nil,RAMDISKID})
+rom_open({nil,RAMDISKID})
+
+INTP_print("READY.")

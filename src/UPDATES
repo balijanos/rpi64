@@ -1,0 +1,18 @@
+-- USING UPDATES FOR RPI-64 --
+
+Online updates now available for rpi-64!
+
+Requirements: 
+	rpi-64 version 1.2 or higher
+Usage:
+	sh update
+	
+if new update package found the following message will occur:
+	UPDATES AVAILABLE:
+		[number of update] [description]
+		...
+	Select update number (Q to quit):
+	
+Select number of update and press enter.
+
+If scripts asks 'Apply update immediately (Y/N)?' and you answers 'y' the update will be applied and script will terminated.

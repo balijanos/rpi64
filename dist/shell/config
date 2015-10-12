@@ -1,0 +1,14 @@
+-- 
+-- RPI-64 CONFIGURATION
+--
+
+local bpp = 0 -- default
+local fullscreen = 0 -- no
+videoinit(800,480,bpp,fullscreen)
+
+-- TOP, BOTTOM, LEFT, RIGHT borders
+setborder(20,20,36,36)
+
+-- Execute autorun.lua after OPEN command
+AUTORUN = true
+

@@ -1,0 +1,113 @@
+----------------------------------------------------------------------------
+-- RPI-64 update script
+-- v1.0
+-- requires rpi-64 1.2
+----------------------------------------------------------------------------
+local socket = require("socket")
+local http = require("socket.http")
+local host = "https://sourceforge.net/projects/pi64/files/updates/"
+----------------------------------------------------------------------------
+local function exists(fileName)
+	if fileName == nil then return fileName end
+	local file = io.open(_UPDATE_ROOT..fileName)
+	if file ~= nil then
+		io.close(file)
+		return true
+	end
+	return nil
+end
+
+local function showUpdates()
+	local uf = {}
+	for k,v in pairs(update_files) do
+		if not exists(v.RENAME) then 
+			table.insert(uf,v)
+		end		
+	end	
+	if uf[1] then
+		print("UPDATES AVAILABLE:")
+		for k,v in pairs(uf) do
+			local inst = ""
+			-- if exists(v.RENAME) then inst="Installed" end
+			print(k,v.DESC,inst)
+		end	
+		return 1
+	else	
+		print("NO UPDATES AVAILABLE.")
+		return nil
+	end
+end
+
+local function dl(file)
+	local body, code, headers, err = http.request(host..file.."/download")
+	return body,code,err
+end
+local _filecopy = INTP_filecopy
+local _copy = INTP_copy
+
+local update_desc = "updates.txt"
+if arg[2] then
+	print(arg[2])
+	update_desc = arg[2]
+end
+
+print("Searching for updates...")
+local body, code, err = dl(update_desc)
+if code == 200 then
+	local f = loadstring(body)
+	if f then f() end
+	print("Update version "..update_version.." found!")
+	if update_requirements then		
+		showUpdates()
+		while (true) do		
+			print("Select update number (Q to quit):")
+			local up = input()	
+			if update_files[tonumber(up)] then
+				up = update_files[tonumber(up)]
+				if exists(up.RENAME) then
+					print("Update already installed!")
+				else
+					print("Installing update:"..up.DESC)
+					print("Dowloading:"..up.FILE)				
+					body,code,err = dl(up.FILE)				
+					if body and code==200 then 
+						if up.RENAME and exists(up.TARGET) then
+							print("Renaming "..up.TARGET.." to "..up.RENAME)
+							if _filecopy(_UPDATE_ROOT..up.TARGET,_UPDATE_ROOT..up.RENAME)==nil then
+								print("Renaming failed") 
+								break
+							end
+						end
+						print("Copying "..up.FILE.." to "..up.TARGET)
+						_copy(_UPDATE_ROOT.."/"..up.TARGET,body,string.len(body))
+						print("Update '"..up.DESC.."' installed")
+						if up.APPLY then
+							print("Apply update immediately (Y/N)?")
+							local ch = input()
+							if string.upper(ch)=="Y" then
+								print("Update applied!")
+								interpret(up.APPLY)
+								break
+							end
+						end
+					else
+						print("ERROR: Update download failed!")
+					end
+				end
+			elseif up and string.upper(up)=="Q" then
+				print("Updating finished")
+				break
+			else
+				showUpdates()
+			end	
+		end
+	else
+		print("ERROR: THIS UPDATE REQUIRES ENGINE VERSION 1.2 or HIGHER")
+		if _VERSION then
+			print("")
+			print("Try to run sh update update_".._VERSION)		
+		end
+	end
+else
+	print("ERROR: "..tostring(code))
+end

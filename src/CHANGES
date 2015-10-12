@@ -1,0 +1,114 @@
+===================
+rpi-64 version v1.3
+===================
+
+ROM changes:
+------------
+* current rom is V1D
+* minor bugfixes
+
+Engine changes:
+---------------
++ access to system and hihglight colors now available from config
+* row->chars reallocation failed (commonEditor.c:141)
+	after reset<esc>print("\r")<esc> sequence the engine failed to reallocate memory
+* minor bugfixes in sprite engine
+		
+===================
+rpi-64 version v1.2
+===================
+
+ROM changes:
+------------
+* current rom is V1C
+* quoted parameters are now optional for load,save,copy and delete commands
+- audio library not automatically required by ROM
+
+added new shell commands:
++ input -- console input
++ new	-- clears editor content (intplua.c)
++ shell -- executes script in console mode (within chip/shell folder)
+		first parameter always the "scriptname"
+		string parameters can be quoted with "" eg. "Hello world"
+
+modified shell commands:
+* run  -- run now accepts parameters (ARGS)
+		first parameter always the "filename" or - if you want run current editor content
+		string parameters can be quoted with "" eg. "Hello world"
+
+new shell scrips:
++ update -- online update tool
+	usage: sh update
+		
+added quick commands:
+	ALT + n	-- clears editor content
+	
+added global variable _ROM_VERSION
+	
+Engine changes:
+---------------
+cursor position fixed on load to editor (editor.c)
+no highlighting in console mode
+minor bugfixes
+
+new commands:
++ input	-- console input
+
+built-in library changes:
+* 'bit32' library moved to external libraries
+* 'spl' the simple (chipmunk based) physics library moved to external libraries
+		
+		
+===================		
+rpi-64 version v1.1
+===================
+
+ROM changes:
+------------
+current rom is V1B 
+
+added new shell commands:
++ exit	-- shutdowns rpi-64 
++ copy	-- copies entire disk content or single file to another disk
+
+modified shell commands:
+* list  -- list now accepts parameters
+
+added quick commands:
+	ALT + 0..9 -- opens disk n
+	ALT + C    -- clears screen
+	ALT + D    -- lists active disk content
+	ALT + E    -- prints LASTERROR
+	ALT + L    -- loads program 
+	ALT + R    -- runs program
+
+	CTRL + D   -- delete line
+	CTRL + B   -- delete chars before cursor
+	CTRL + E   -- delete chars from cursor	
+	CTRL + I   -- insert line
+	
+	CTRL + S   -- saves editor content cot file (editor mode only)
+	CTRL + C   -- copy line (editor mode only)
+	CTRL + V   -- paste line (editor mode only)
+	CTRL + X   -- cut line (editor mode only)
+
+Engine changes:
+---------------
+built-in library changes:
++ added 'bit' library arshift,band,bnot,bor,bxor,btest,extract,lrotate,lshift,replace,rrotate,rshift
++ added 'spl' a simple (chipmunk based) physics library
+
+extended commands:
+* text(x,y,string [,isUDFFont [,kerning]): draw string at position with specified font (see setfont) and kerning
+* tile(x,y,tileNum,[rotation],[antialiasing],[zoom]): draw a tile with rotation, antialiasing and zoom
+* draw(x,y,[rotation],[antialiasing],[zoom]): draw sprite with rotation, antialiasing and zoom 
+  
+new commands:
++ setfont(char_code,table_of_bytes): updates user defined character graphics
++ sprite:setColorKey(r,g,b): sets new transparent color for sprite overriding default transparency
+
+corrections:
++ added arc and rotate functions to basic drawing routines
+- corrected sprite positioning on draw with rotation
+- get/putpixel y coordinate corrected
+- runtime stop key is [SHIFT+ESC] instead of simple [ESC]

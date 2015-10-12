@@ -1,0 +1,689 @@
+--
+-- File Manager
+--
+-- v1.2 beta
+--
+
+INTP_mode(4) -- GRAPHIC RUNTIME MODE
+
+local hb = 10
+local hfw = WIDTH/2-15
+local hfh = HEIGHT-20
+
+local root = "disk"
+local ZEXT = {"zip","ZIP"}
+local popup = nil
+local cbfunc = nil -- callback if any
+local cbparms = {} -- callback parameters
+
+local dbg = ""
+
+local lpane = {
+	path = {root},
+	files = nil,
+	zipname = nil,
+	sel = 0,
+	min = 0,
+	max = 0,
+}
+local rpane = {
+	path = {root},
+	files = nil,
+	zipname = nil,
+	sel = 0,
+	min = 0,
+	max = 0,
+}
+
+local act = 0
+local size = nil
+
+local function about()
+	popup = {message="Version 1.2", header="RPI-64 File Manager"}	
+end
+
+local function frame(whole)
+	if whole==nil then
+		fill(165,165,255,128)
+		rect(0,0,WIDTH,HEIGHT)
+		fill(66,66,231,255)
+		rect(hb,hb,hfw,hfh)
+		rect(hfw+2*hb,hb,hfw,hfh)
+		rect(hb,hb,WIDTH-2*hb,2*hb)
+	else 
+		fill(165,165,255,128)
+		line(0,hfh-hb,WIDTH,hfh-hb)
+		line(0,3*hb,WIDTH,3*hb)
+		fill(32,192,192,128)
+		text(2*hb,hfh-hb,string.upper(table.concat(lpane.path,"/"))) 
+		text(hfw+3*hb,hfh-hb,string.upper(table.concat(rpane.path,"/")))
+		local str  = "F5-      F6-      F7-       F8-        F10-"
+		local str2 = "   COPY     MOVE     MKDIR     DELETE      QUIT"
+		local dx = (WIDTH-12*string.len(str))/2
+		text(hb+dx,hb,str)
+		fill(192,192,32,128)
+		text(hb+dx,hb,str2)		
+	end
+end
+
+local inputString = ""
+
+function draw_input_xy(x,y) 	
+	local n = popup.len or 80
+	fill(20, 20, 20, 200)
+	text(x,y, inputString .. "_")
+	for k,v in pairs(keyboard.pressed) do
+		if k and string.len(k)==1 and string.len(inputString)<n then
+			inputString = inputString .. string.upper(tostring(k))
+		else
+			if k and k=="backspace" then
+				inputString = string.sub(inputString,1,-2)
+			elseif k and k=="return" then
+				return 1
+			elseif k and k=="escape" then
+				inputString = ""
+				return 1
+			end
+		end
+    end
+	keyboard.pressed={} -- reset
+	return 0
+end
+
+local function doInput()
+	filled(true)
+	fill(165,165,255,128)
+	rect(2*hb,HEIGHT/2-2*hb,WIDTH-4*hb,4*hb)
+	fill(66,66,231,255)
+	filled(false)
+	rect(2*hb+5,HEIGHT/2-2*hb+5,WIDTH-4*hb-10,4*hb-10)
+	filled(true)
+	fill(32,32,192,128)		
+	text(3*hb,HEIGHT/2-hb,popup.message)
+	if  draw_input_xy(3*hb+string.len(popup.message)*12,HEIGHT/2-hb)==1 then
+		popup=nil
+	end
+end
+
+local function doCallback()
+	if type(cbfunc)=="function" and type(cbparms)=="table" then
+		local f = cbfunc
+		local t = cbparms
+		cbfunc = nil
+		cbparms = {}
+		f(unpack(t))		
+	end
+end
+
+-- popup = {message = "Are you sure? (Y/N)", header="Confirm delete",buttons={"Y","N"},funcs={deleteFile},args={}}
+local function doPopup()
+	if popup.input then
+		return doInput()
+	end
+	filled(true)
+	if popup.error then
+		fill(192,128,128,192)
+	else
+		fill(192,192,64,128)
+	end
+	rect(2*hb,HEIGHT/2-3*hb,WIDTH-4*hb,6*hb)
+	fill(32,32,128,128)
+	filled(false)
+	rect(2*hb+5,HEIGHT/2-3*hb+5,WIDTH-4*hb-10,6*hb-10)
+	filled(true)
+	fill(32,32,192,128)		
+	text(hb+(WIDTH-12*string.len(popup.message))/2,HEIGHT/2-2*hb,popup.message)
+	if popup.header then
+		fill(32,32,32,128)		
+		text(hb+(WIDTH-12*string.len(popup.header))/2,HEIGHT/2,popup.header)
+	end
+	if popup.buttons then
+		for k,v in ipairs(popup.buttons) do
+			if keyboard.pressed[v] then				
+				if popup.funcs and popup.funcs[k] then
+					-- popup = {message = "CALL", header="CALL"}					
+					if popup.args and popup.args[k] then
+						popup.funcs[k](unpack(popup.args[k]))
+					else					
+						popup.funcs[k]()
+					end					
+				end
+				popup = nil
+			end
+		end
+	end
+	if keyboard.pressed['escape'] or keyboard.pressed['return'] then
+		popup = nil
+	end
+end
+
+local function showFiles(pane,paneid)	
+	local y = hfh-3*hb
+	local x = 2*hb + paneid*(hfw+hb)
+	local str = nil
+	if pane.sel<1 then pane.sel = 1 end
+	if pane.sel>pane.max then pane.sel = pane.max end
+	for k,v in pairs(pane.files) do
+		if k>=pane.min and y>2*hb then
+			if paneid==act and pane.sel == k then
+				fill(64,64,64,255)
+				rect(x-2,y-2,WIDTH/2-3*hb,2*hb)
+				fill(200,200,153,255)
+			else
+				fill(200,200,128,64)
+			end
+			str = v.name
+			if v.attr.mode ~= "directory" then
+				fill(224,224,224,128)
+			elseif v.attr.zipname then
+				fill(128,192,128,128)
+				str = "["..str.."]"
+			else
+				str = "["..str.."]"
+			end
+			text(x,y,str)
+			y = y - 2*hb
+		else
+			size = size or k
+		end
+	end
+end
+
+local function _sort_files(a,b)
+  return a.name < b.name
+end
+
+local function getFiles(path,noup)
+	local dirs = {}
+	local files = {}
+	local oldpath=lfs.currentdir()
+	lfs.chdir(_UPDATE_ROOT..path)	
+	if not noup then
+		table.insert(dirs, {name="..",attr={mode="directory"}})
+	end		
+	for file in lfs.dir(".") do
+		local attr = lfs.attributes (file)
+		if attr.mode == "directory" and file ~= "." and file ~= ".." then			
+			if type(attr)=="table" then
+				table.insert(dirs, {name=file,attr=attr})
+			end
+		end
+	end	
+	table.sort(dirs,_sort_files)
+	for file in lfs.dir(".") do
+		local attr = lfs.attributes (file)
+		if attr.mode ~= "directory" then			
+			if type(attr)=="table" then
+				if string.find(string.upper(file),".ZIP")==string.len(file)-3 then
+					local zname = string.sub(file,1,string.find(string.upper(file),".ZIP")-1)
+					-- open zip
+					local zfile, err = zip.open(_UPDATE_ROOT..root.."/"..file,ZEXT)
+					if zfile then
+						local list = {}
+						for file in zfile:files() do				
+							table.insert(list,file)								
+						end
+						zfile:close()
+						for k,v in ipairs(list) do
+							if k==1 and string.find(v.filename,"/") then 
+								table.insert(files,{name=zname,attr={mode="directory",zipname=file}})
+							elseif k==1 then
+								table.insert(files,{name=zname,attr={mode="directory",zipname=file}})
+							end
+						end
+					end
+				else
+					table.insert(files, {name=file,attr=attr})
+				end
+			end
+		end
+	end	
+	table.sort(files,_sort_files)
+	lfs.chdir(oldpath)
+	for k,v in ipairs(files) do
+		table.insert(dirs,v)
+	end
+	return dirs
+end
+
+local function getZipFiles(path,zipname)
+	local dirs = {}
+	local files = {}
+	local list = {}
+		
+	local zpath = string.sub(path,string.len(root)+2)
+	local p = string.find(zpath,"/")
+	if p then
+		zpath = string.sub(zpath,p+1).."/"
+	else
+		zpath = ""
+	end
+
+	local zfile, err = zip.open(_UPDATE_ROOT..root.."/"..zipname,ZEXT)
+	if zfile then		
+		for file in zfile:files() do				
+			table.insert(list,file)	
+		end
+		zfile:close()
+	end
+	table.insert(dirs,{name="..",attr={mode="directory",zipname=file}})
+	for k,v in ipairs(list) do	
+		local elem = string.sub(v.filename,1,-2)
+		p = string.find(elem,"/") or 0
+		elem  = string.sub(elem, p+1)
+		if string.sub(v.filename,-1,-1)=="/" and zpath~=v.filename and string.find(v.filename,zpath) then
+		
+			-- check subdir
+			local _, scp1 = zpath:gsub("/","")
+			local _, scp2 = v.filename:gsub("/","")
+			if scp1+1==scp2 then
+				table.insert(dirs,{name=elem,attr={mode="directory",zipname=zipname}})
+			end
+		end
+	end
+	table.sort(dirs,_sort_files)
+	for k,v in ipairs(list) do	
+		local fn = v.filename:match( "([^/]+)$" )
+		if fn and zpath..fn == v.filename  then
+			table.insert(files,{name=fn,attr={mode="file",zipname=zipname}})
+		end
+	end
+	table.sort(files,_sort_files)
+	for k,v in ipairs(files) do
+		table.insert(dirs,v)
+	end
+	return dirs
+end
+
+local function findPanePos(pane,elem)
+	for k,v in pairs(pane.files) do
+		if v.name ~= elem then
+			local s = size or 999
+			if pane.sel+pane.min>=s and pane.sel<pane.max then pane.min = pane.min + 1 end
+			pane.sel = pane.sel + 1	
+		else
+			break
+		end
+	end
+end
+
+local function findPaneFile(pane,elem)
+	for k,v in pairs(pane.files) do
+		if v.name == elem then
+			return 1
+		end
+	end
+end
+
+local function refreshPane(pane, full, zipname)	
+	if zipname and table.concat(pane.path)~=root then
+		pane.zipname = zipname
+		pane.files = getZipFiles(table.concat(pane.path,"/"),zipname)
+	else
+		local noup = (table.concat(pane.path)==root)
+		pane.zipname = nil
+		pane.files = getFiles(table.concat(pane.path,"/"),noup)
+	end
+	if full then	
+		pane.min = 1
+		pane.sel = 1
+	end
+	pane.max = table.getn(pane.files)
+end
+
+local function refreshPanes(full)
+	refreshPane(lpane, full, lpane.zipname)
+	refreshPane(rpane, full, rpane.zipname)
+end
+
+---------------------------------------
+local function deleteFile(pane)
+	local fn = "/"..pane.files[pane.sel].name
+	INTP_delete(_UPDATE_ROOT..table.concat(pane.path,"/")..fn)
+	if pane.sel == pane.max then pane.sel=pane.sel-1 end
+	refreshPanes()
+end
+
+local function _deldir(pane,path)		
+	local oldpath = lfs.currentdir()
+	lfs.chdir(path)
+	for file in lfs.dir(".") do
+        if file ~= "." and file ~= ".." then
+            local attr = lfs.attributes(file)
+			if type(attr)=="table" then
+				if attr.mode == "directory" then					
+					_deldir(pane,file)
+					lfs.rmdir(file)
+				else
+					os.remove(file)
+				end
+			else				
+				lfs.chdir(oldpath)
+			end
+        end
+    end
+	lfs.chdir(oldpath)
+end
+
+local function deleteDir(pane)
+	local fn = _UPDATE_ROOT..table.concat(pane.path,"/").."/"..pane.files[pane.sel].name
+	_deldir(pane,fn)
+	lfs.rmdir(fn)
+	if pane.sel == pane.max then pane.sel=pane.sel-1 end
+	refreshPanes(true)
+end
+
+local function copyFile(spane,tpane,tname)
+	if table.concat(tpane.path)==root then
+		popup = {message = "Cannot copy file out of disks!",header="Error",error=true}
+	elseif spane.files[spane.sel].attr ~= "directory" and spane.files[spane.sel].attr.zipname==nil then
+		local source = nil
+		local target = nil
+		local fn = "/"..spane.files[spane.sel].name				
+		source = table.concat(spane.path,"/")..fn
+		local fn = "/"..(tname or spane.files[spane.sel].name)
+		target = table.concat(tpane.path,"/")..fn
+		if source==target then		
+			popup = {message = "Can't copy file to itself!", header="Error",error=true}
+		elseif source and target and source~=target and INTP_filecopy(_UPDATE_ROOT..source,_UPDATE_ROOT..target)==nil then			
+			popup = {message = "File write error!", header="Error",error=true}
+		else	
+			-- refresh target pane			
+			refreshPane(tpane)		
+			return true
+		end		
+	elseif spane.files[spane.sel].attr.zipname then
+		local fn = spane.files[spane.sel].name
+		local td = table.concat(tpane.path,"/")	
+		local oldpath=lfs.currentdir()
+		lfs.chdir(_UPDATE_ROOT)
+		local z, err = zip.openfile(_UPDATE_ROOT..table.concat(spane.path,"/").."/"..fn,ZEXT)
+		if z then 
+			local b = z:read("*all")
+			local n = z:seek("end")
+			z:close()
+			n = INTP_copy(td.."/"..(tname or fn),b,n)
+		else
+			popup = {message = "Archive read error!", header="Error",error=true}
+		end
+		lfs.chdir(oldpath)
+		refreshPane(tpane)		
+	end
+end
+
+local function _cpdir(targetpath)
+	local oldpath = lfs.currentdir()
+    for file in lfs.dir(".") do
+        if file ~= "." and file ~= ".." then
+            local attr = lfs.attributes(file)
+			if type(attr)=="table" then
+				if attr.mode == "directory" then	
+					lfs.mkdir(targetpath.."/"..file) -- to be safe
+					lfs.chdir(file)
+					if _cpdir(targetpath.."/"..file)==nil then
+						lfs.chdir(oldpath)
+						return
+					end		
+					lfs.chdir(oldpath)
+				else				
+					if INTP_filecopy(file,targetpath.."/"..file)==nil then
+						lfs.chdir(oldpath)
+						return
+					end
+				end
+			end
+        end
+    end
+	lfs.chdir(oldpath)
+	return 1
+end
+
+local function copyDir(spane,tpane)
+	local oldpath = lfs.currentdir()
+	local fn = "/"..spane.files[spane.sel].name
+	lfs.chdir(_UPDATE_ROOT..table.concat(spane.path,"/")..fn)	-- source files
+	lfs.mkdir(_UPDATE_ROOT..table.concat(tpane.path,"/")..fn)	-- target dir
+	_cpdir(_UPDATE_ROOT..table.concat(tpane.path,"/")..fn)		-- copy * to target
+	lfs.chdir(oldpath)
+	refreshPanes()
+end
+
+local function _renfile(pane,tpane,pass)		
+	local fn = "/"..pane.files[pane.sel].name
+	if pass then
+		if copyFile(pane,tpane,inputString) then deleteFile(pane) end
+		refreshPanes()
+	else		
+		-- rename?		
+		if table.concat(pane.path)==table.concat(tpane.path) then 
+			if pane.files[pane.sel].name==inputString then
+				popup = {message="Can't move file to itself!", header="Error",error=true}
+			elseif INTP_filecopy(_UPDATE_ROOT..table.concat(pane.path,"/")..fn,_UPDATE_ROOT..table.concat(tpane.path,"/").."/"..inputString) then
+				deleteFile(pane)
+			else	
+				popup = {message="Can't rename file!", header="Error",error=true}
+			end
+		else
+		-- move?
+			-- exists?
+			if findPaneFile(tpane,inputString) then			
+				popup = {message="Overwrite existing file? (Y/N)", buttons={"y","n"},header="Confirm overwrite file",funcs={_renfile},args={ {pane,tpane,2} }}			
+			else
+			-- copy then remove
+				_renfile(pane,tpane,2)
+			end
+		end		
+	end
+end
+
+local function renameFile(pane,tpane)
+	inputString = pane.files[pane.sel].name
+	popup = {message="Move/rename to:", input=true}
+	cbfunc = _renfile 
+	cbparms = {pane,tpane}	
+end
+
+local function _movedir(spane,tpane)
+	local oldpath = lfs.currentdir()
+	local fn = "/"..spane.files[spane.sel].name
+	local td = "/"..inputString
+	lfs.chdir(_UPDATE_ROOT..table.concat(spane.path,"/")..fn)	-- source files
+	if lfs.mkdir(_UPDATE_ROOT..table.concat(tpane.path,"/")..td)	-- target dir
+	and _cpdir(_UPDATE_ROOT..table.concat(tpane.path,"/")..td)	-- copy * to target
+	then 
+		lfs.chdir(oldpath)
+		deleteDir(spane)
+	else
+		popup = {message="Can't move/rename directory!", header="Error",error=true}
+	end
+	lfs.chdir(oldpath)
+	refreshPanes()
+end
+
+local function moveDir(pane,tpane)
+	inputString = pane.files[pane.sel].name
+	popup = {message="Move to "..table.concat(tpane.path,"/").." as:", input=true}
+	cbfunc = _movedir 
+	cbparms = {pane,tpane}	
+end
+
+local function _mkdir(pane)		
+	if lfs.mkdir(_UPDATE_ROOT..table.concat(pane.path,"/").."/"..inputString)==nil then
+		popup = {message="Can't create directory!", header="Error",error=true}
+	end
+	refreshPanes()	
+end
+
+local function makeDir(pane)
+	inputString = ""
+	popup = {message="Enter new directory name:", input=true}	
+	cbfunc = _mkdir 
+	cbparms = {pane}	
+end
+
+local function _unpack_zip(azip, targetdir)		
+	if (azip==nil) then
+		return 0,nil
+	end			
+	local zfile, err = zip.open(azip,ZEXT)
+	if (zfile==nil) then
+		return 0
+	end	
+	local list = {}
+	for file in zfile:files() do
+		table.insert(list,file)
+	end
+	zfile:close()
+	for count, file in pairs(list) do
+		local z, err = zip.openfile(azip.."/"..file.filename,ZEXT)
+		if z then 
+			local b = z:read("*all")
+			local n = z:seek("end")
+			z:close()
+			n = INTP_copy(targetdir.."/"..file.filename,b,n)
+			if n==nil or n==0 then 
+				lfs.mkdir(targetdir.."/"..file.filename)
+			end
+		else
+			return 0
+		end		
+	end	
+	return 1
+end
+
+local function unpackZip(spane,tpane)		
+	local fn = spane.files[spane.sel].name
+	local td = table.concat(tpane.path,"/")	
+	local oldpath=lfs.currentdir()
+	lfs.chdir(_UPDATE_ROOT)
+	if _unpack_zip(_UPDATE_ROOT..table.concat(spane.path,"/").."/"..fn, td)==0 then	
+		popup = {message = "Archive read error!", header="Error",error=true}
+	end
+	lfs.chdir(oldpath)
+	refreshPane(tpane)
+end
+---------------------------------------
+
+local function kbdHandler()	
+	local pane = lpane
+	if act == 1 then pane = rpane end
+	if popup then
+		doPopup()
+	elseif cbfunc then
+		doCallback()
+    elseif keyboard.pressed['up'] then
+		local s = size or 999
+		if pane.min>=pane.sel and pane.sel>1 then pane.min = pane.min - 1 end
+		pane.sel = pane.sel - 1
+	elseif keyboard.pressed['page up'] then
+		pane.sel = pane.min
+    elseif keyboard.pressed['down'] then	
+		local s = size or 999
+		if pane.sel+pane.min>=s and pane.sel<pane.max then pane.min = pane.min + 1 end
+		pane.sel = pane.sel + 1	
+	elseif keyboard.pressed['page down'] then	
+		pane.sel = pane.max
+    elseif keyboard.pressed['return'] then
+		local f = pane.files[pane.sel]
+		if f and f.attr.mode=="directory" then
+			local elem = nil
+			if f.name==".." then				
+				elem = pane.path[table.getn(pane.path)]
+				table.remove(pane.path)
+			else
+				table.insert(pane.path,f.name)				
+			end		
+			refreshPane(pane,true,f.attr.zipname or pane.zipname)
+			if elem then 
+				findPanePos(pane,elem)
+			end
+		else
+		end
+	elseif keyboard.pressed['space'] then
+		-- todo
+	elseif keyboard.pressed['tab'] then
+		if act==1 then act=0 else act=1 end	
+	elseif keyboard.pressed['f5'] then
+		local tpane = rpane
+		if act==1 then
+			tpane=lpane
+		end
+		if table.concat(pane.path)==root and pane.files[pane.sel].attr.zipname then
+			if table.concat(tpane.path)==root then 
+				popup = {message="Can't copy file to itself!", header="Error",error=true}
+			else
+				popup = {message="Unpack and overwrite existing file(s)? (Y/N)", buttons={"y","n"},header="Unpack archive",funcs={unpackZip},args={{pane,tpane}}}
+			end
+		elseif pane.files[pane.sel].name~=".." and pane.files[pane.sel].attr.mode ~= "directory" then
+			if findPaneFile(tpane,pane.files[pane.sel].name) then
+				if table.concat(pane.path)==table.concat(tpane.path) then
+					popup = {message="Can't copy file to itself!", header="Error",error=true}
+				else
+					popup = {message="Overwrite existing file? (Y/N)", buttons={"y","n"},header="Confirm overwrite file",funcs={copyFile},args={ {pane,tpane} }}
+				end
+			else	
+				copyFile(pane,tpane)
+			end
+		elseif pane.files[pane.sel].name~=".." and pane.files[pane.sel].attr.mode == "directory" then
+			if table.concat(pane.path)==table.concat(tpane.path) then
+				popup = {message="Can't copy directory to itself!", header="Error",error=true}
+			else
+				popup = {message="Overwrite existing file(s)? (Y/N)", buttons={"y","n"},header="Confirm overwrite",funcs={copyDir},args={ {pane,tpane} }}
+			end
+		end
+	elseif keyboard.pressed['f6'] then
+		local tpane = rpane
+		if act==1 then
+			tpane=lpane
+		end
+		if table.concat(pane.path)==root and pane.files[pane.sel].attr.zipname then
+			popup = {message="Can't move an archive!", header="Error",error=true}		
+		elseif table.concat(pane.path)~=root and pane.files[pane.sel].attr.zipname then
+			popup = {message="Can't move from archive!", header="Error",error=true}		
+		elseif pane.files[pane.sel].name~=".." and pane.files[pane.sel].attr.mode ~= "directory" then
+			renameFile(pane,tpane)
+		elseif pane.files[pane.sel].name~=".." and pane.files[pane.sel].attr.mode == "directory" then
+			moveDir(pane,tpane)
+		end
+	elseif keyboard.pressed['f7'] then
+		if pane.files[pane.sel].attr.zipname then
+			popup = {message="Can't update an archive!", header="Error",error=true}
+		else
+			makeDir(pane)
+		end
+	elseif keyboard.pressed['f8'] then
+		if table.concat(pane.path)~=root and pane.files[pane.sel].attr.zipname then
+			popup = {message="Can't delete from archive!", header="Error",error=true}
+		elseif pane.files[pane.sel].attr.mode ~= "directory" then			
+			popup = {message="Are you sure? (Y/N)", buttons={"y","n"},header="Confirm delete file",funcs={deleteFile},args={ {pane} }}							
+		else
+			popup = {message="Are you sure? (Y/N)", buttons={"y","n"},header="Confirm delete directory",funcs={deleteDir},args={ {pane} }}							
+		end	
+	elseif keyboard.pressed['f1'] then
+		about()
+	elseif keyboard.pressed['q'] or keyboard.pressed['f10'] then
+		keyboard.pressed={}
+		return 1
+	end
+	keyboard.pressed={}
+end
+
+function setup()	
+	about()
+end
+	
+function cleanup()		
+	print("BYE")
+end
+
+-- 'main' -- 
+function draw()	
+    frame()
+	if lpane.files==nil or rpane.files==nil then
+		refreshPanes(true)
+	end
+	showFiles(lpane,0)	-- lpane on left
+	showFiles(rpane,1)	-- rpane on right
+	frame(1)
+	return kbdHandler()
+end

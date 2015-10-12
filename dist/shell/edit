@@ -1,0 +1,21 @@
+if arg[2] then
+	local ret = INTP_load("../../shell/"..tostring(arg[2]))
+	if ret then
+		INTP_mode(2) -- EDIT mode
+	else
+		print("Create new script? (y/n)")
+		local up = input()
+		if up=="y" then
+			INTP_new()
+			ret = INTP_save("../../shell/"..tostring(arg[2]))
+			if ret then
+				INTP_mode(2) -- EDIT mode
+			else
+				print("File create error!")
+			end
+		end
+	end
+else
+	print("USAGE:")
+	print("       sh edit <shellscript>")
+end

@@ -1,0 +1,23 @@
+-- 
+-- RPI-64 MONCHROME (BW) CONFIGURATION
+--
+
+if (_VERSION ~= nil) and (_VERSION > "1.2") then
+	RPI_EDITOR = 1
+	RPI_SHELL = 2
+	RPI_FRAME = 3
+	RPI_FONT = 4
+	RPI_EDITOR_CURSOR = 5
+	RPI_SHELL_CURSOR = 6
+
+	setsyscolor(RPI_EDITOR,240,240,240,255)
+	setsyscolor(RPI_SHELL,240,240,240,255)
+	setsyscolor(RPI_FRAME,240,240,240,128)
+	setsyscolor(RPI_FONT,0,0,0,255)
+	setsyscolor(RPI_EDITOR_CURSOR,20,20,20,128)
+	setsyscolor(RPI_SHELL_CURSOR,20,20,20,128)
+	
+	for i=1,8 do
+		sethlcolor(i,0,0,0,255)	
+	end	
+end

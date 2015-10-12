@@ -1,0 +1,23 @@
+-- 
+-- RPI-64 MONCHROME (GREEN) CONFIGURATION
+--
+
+if (_VERSION ~= nil) and (_VERSION > "1.2") then
+	RPI_EDITOR = 1
+	RPI_SHELL = 2
+	RPI_FRAME = 3
+	RPI_FONT = 4
+	RPI_EDITOR_CURSOR = 5
+	RPI_SHELL_CURSOR = 6
+
+	setsyscolor(RPI_EDITOR,0,40,0)
+	setsyscolor(RPI_SHELL,0,40,0)
+	setsyscolor(RPI_FRAME,0,0,0)
+	setsyscolor(RPI_FONT,100,240,100,192)
+	setsyscolor(RPI_EDITOR_CURSOR,0,255,0,80)
+	setsyscolor(RPI_SHELL_CURSOR,0,255,0,80)
+
+	for i=1,8 do
+		sethlcolor(i,100,240,100,192)	
+	end	
+end

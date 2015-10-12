@@ -1,0 +1,335 @@
+____________
+___RPI64____
+version v1.3
+============
+RPI64 is not an emulator just mimics the 80's classic 8bit computers.
+The program primary target is raspberry pi but it should work on various operating systems (LINUX/UNIX, WINDOWS)
+PI64 has a small shell/interpreter with a C64 like fullscreen editor and a built-in program editor.
+The programming language of RPI64 is the LUA programming language.
+RPI64 has 'ROM' which was written also in LUA. 
+This 'ROM' is responsible for the shell/interpreter and for some i/o functions.
+Graphic and sound based on SDL and RtAudio libraries. Simple phisycs library based on Chipmunk.
+RPI64 is open for any extensions just create or install your favourite library (.lua, .so, .dll) and use it!
+RPI64 doesn't requires X on unix systems!
+This project sorely based on Salvatore Sanfilippo's load81 project. (https://github.com/antirez/load81)
+RPI64 written in pure c so it's easy to port to any os.
+
+REQUIREMENTS
+============
+SDL, SDL_image, SDL_gfx, lua, luafs, luazip
+
+Additional (application depended) requirements are:
+audio, socket, mime, ltn12, bit32, sqlite3 and spl(simply physics library)
+
+INSTALLATION
+============
+on windows systems - unzip the package and run pi64.exe. All libraries included in the zip file.
+
+on linux/unix systems:
+	install/check the following  packages - SDL, SDL_image, SDL_gfx
+	unpack release package and execute program (./pi64), X not required!
+	
+	sourcecode dependencies:
+	sudo apt-get install libsdl-image1.2-dev libsdl-gfx1.2-dev libzzip-dev liblua5.1-0-dev luarocks git
+	sudo luarocks install luafilesystem
+	sudo luarocks install luazip
+	
+USAGE
+=====
+rpi64 [options] [romname]
+
+options (optional):
+	--width <pixels>       Set screen width
+	--height <pixels>      Set screen height
+	--full                 Enable full screen mode
+	--bpp                  SDL bit per pixel setting (default=24, 0=hardware)
+	--fps                  Show frames per second
+	--help                 Show this help screen
+	
+system variables:
+	LASTERROR	- the last error message
+	WIDTH		- screen width in pixels
+	HEIGHT		- screen height in pixels
+	SCREEN		- pointer for SDL surface, useful for SDL based extensions
+
+DIRECTORY STRUCTURE
+===================
+<pi64> - place of executable and documentations
+       |
+	   <rom> - place of rom(s)
+	   |
+	   <disk> - place of r/w disk or r/o cartridges(zip files)
+	   |      |
+	   |	  <#> - the 'ramdisk' or default disk
+	   |	  <0..n> - r/w disks. use open <n> command to use it
+	   |	  <xxx.zip> - r/o cartridge or cd. open command will copy the content to ramdisk temporaly.
+	   |
+	   <clibs> - place of binary extensions
+	   |
+	   <lua> - place of lua extensions
+	
+THE SHELL/INTERPRETER
+=====================
+The shell has a basic fullscreen editor. 
+
+commands:
+	help	- list available commands
+	print	- prints the given parameters separated by space
+	open	- opens disk. The opened disk will be the default disk except the r/o disks. 
+			  To list all available disks use open command without parameters.
+			  These disk's contents will be copied to ramdisk.
+			  The ramdisk content always will be deleted on startup!
+	list	- lists the disk content
+	load	- loads the file from disk
+	run		- runs the current loaded program or loads and runs program from disk
+	save	- saves the program editor's content to disk
+	delete	- deletes file from disk
+	clear	- clears the screen
+	reset	- soft reset for PI64. Add a romname as parameter if you have one.
+	format	- (re)creates a new empty r/w disk
+	copy	- copies current disk content or one file to another disk
+	exit	- shutdowns rpi64
+	++ since v1.2
+	new		- clears editor content
+	input	- console input
+	shell	- executes script in console mode
+		shell list - lists the available scripts
+		shell edit - loads script to the editor
+		...
+	
+keys:
+	ESC			- switch between shell and program editor mode
+	SHIFT+ESC	- stops the program execution
+
+quick keys:
+	ALT + number	- open disk n
+	ALT + C    		- clear screen
+	ALT + D    		- list active disk content
+	ALT + E    		- print LASTERROR
+	ALT + L    		- load program 
+	ALT + R    		- run program
+	ALT + N    		- clear editor content
+	
+	CTRL + D   		- delete line
+	CTRL + B   		- delete chars before cursor
+	CTRL + E   		- delete chars from cursor		
+	CTRL + I   		- insert line
+	
+THE EDITOR
+=====================	
+quick keys:
+	CTRL + D   		- delete line
+	CTRL + S   		- save editor content to file
+	CTRL + B   		- delete chars before cursor
+	CTRL + E   		- delete chars from cursor
+	CTRL + I   		- insert empty line at cursor
+	CTRL + C   		- copy line
+	CTRL + V   		- paste line
+	CTRL + X   		- cut line
+	
+PROGRAMMING
+===========
+You can use all lua built-in libraries except io. 
+Some functions like os.execute, os.exit and os.rename are disabled by the ROM.
+The functions above are not necessary for PI64 to use it as 'computer'.
+
+PI64 can run any program written in lua if required libs are present.
+To run program which uses graphic and/or sound you need the following program structure.
+
+	function setup()
+		-- initialization will executed once at program start
+	end
+
+	function draw()
+		-- program loop will called while ESC pressed or 'return -1' the program end executed
+	end
+
+	function cleanup()
+		-- executed if the program finished
+	end
+	
+common functions:    
+-----------------
+* videoinit( width, height, bpp, full ): (re)initializes graphics on runtime
+* setfont( charno, table): updates character's font graphics
++ setborder(top,bottom,left,right): sets border size
+* timer(): returns time in msecs
+
+----------------------------------------------------------------------------	
+-- based on original documentation for load81 by Salvatore Sanfilippo --
+
+Drawing functions:
+------------------
+* fill(r,g,b,alpha): select the drawing color.
+* filled(filled): set the filled state (true or false)
+* background(r,g,b): paint the whole background with the specified color.
+* rect(x,y,width,height): draw a rectangle at x,y (left-bottom corner).
+* ellipse(x,y,width,height): draw an ellipse centered at x,y.
+* line(x1,y1,x2,y2): draw a line from x1,y1 to x2,y2.
+* text(x,y,string [,isUDFFont [,kerning]): print the specified text at x,y using a bitmap font, or used defined font with kerning
+* triangle(x1,y1,x2,y2,x3,y3): draw a triangle with the specified vertex.
+* getpixel(x,y): return the red,gree,blue value of the specified pixel.
+* putpixel(x,y,r,g,b,alpha): draw one pixel on screen.
+* polygon(xv, yv): draw a polygon using a table of X values and a table of Y values.
+++ since v1.1
+* arc(x,y,r,start,end) draw an arc centered at x,y with r radius. start/end parameters are degrees not radians!
+* rotate(x,y,cx,cy,radian) rotates point x,y around cx,cy with radian.
++ setfont(char_code,table_of_bytes) updates user defined character graphics
+	
+Sprite functions:
+
+* sprite(file,[x,y,[rotation],[antialiasing]]): draw sprite at coordinates with the 
+  specified rotation (in degrees, default 0) and antialiasing (default false).
+
+Returns a sprite userdata object, with the following functions
+
+* getHeight(): returns the height of the sprite.
+* getWidth(): returns the width of the sprite.
+* getTiles(): returns x,y for the number of tiles horizontally and vertically.
+* setTiles(x,y): set the number of tiles horizontally and vertically.
+* getTileSize(): return w,h for the size of a tile, calculated from the width 
+  and height of the image divided by the number of tiles horizontally and vertically.
+* getTileNum(): returns the number of tiles.
+* tile(x,y,tileNum,[rotation],[antialiasing],[zoom]): draw a tile using tileNum at coordinates with the 
+  specified rotation (in degrees, default 0) antialiasing (default: false) and zoom (default: 1 (100%))
+* draw(x,y,[rotation],[antialiasing],[zoom]): draw sprite at coordinates with the specified rotation 
+  (in degrees, default 0) antialiasing (default: false) and zoom (default: 1 (100%))
++ setColorKey(r,g,b): sets new transparent color for sprite overriding default transparency
+
+Control functions:
+
+* setFPS(fps): Set the frame rate. For default it's set to 30 frames per second.
+
+KEYBOARD EVENTS
+To check if a key 'a' is pressed use:
+
+    if keyboard.pressed['a'] then ...
+
+SDL Key symbol names are used. You can easily find how a given key is
+called using the following Lua program:
+
+    function draw()
+        for k,v in pairs(keyboard.pressed) do
+            print(k)
+        end
+    end
+
+(You can find this program under the examples folder).
+
+LOW LEVEL KEYBOARD EVENTS
+It is also possible to trap low level SDL events accessing keyboard.state
+and keyboard.key fields of the keyboard table.
+
+keyboard.state is one of:
+
+    "down" -> KEYDOWN event
+    "up"   -> KEYUP event
+    "none" -> No event
+
+keyboard.key is set to the key pressed or released when state is different
+than "none".
+
+MOUSE EVENTS
+mouse.x and mouse.y gives you the current mouse coordinates. To check
+if a button is pressed use:
+
+    if mouse.pressed['1'] then ...
+
+Mouse buttons are called '1', '2', '3', ... and so forth.
+
+JOYSTICK EVENTS
+Joystick support is available by directly accessing the joystick[] table.  
+For example:
+
+    joystick[1].x / joystick[1].y = X/Y position of Joystick1
+    joystick[1].button = button state of Joystick1
+    joystick[1].name = "hardware name of the Joystick1"
+
+joystick.count contains the number of joysticks detected by LOAD81 on
+startup, and will be 0 if no joysticks are available.  Max # of Joysticks
+is currently set at 8.
+
+See examples/joysticks.lua and examples/flames.lua for how to use the
+joystick.
+
+-------------------------------------------------------------------------
+-- below is the original documentation for proteaAudio by Gerald Franz --
+
+Audio functions:
+----------------
+* audio.create() 
+	initializes audio playback device. 
+	Parameters:
+	-   tracks 		(optional) number of sounds that can be played in parallel
+	-   frequency 	(optional) playback frequency
+	-   chunkSize 	(optional) size of the internal buffer in bytes. 
+		Note that a small chunkSize results in low playback latency, 
+		but may cause computational overhead and hick-ups under higher system load
+	Returns:
+		true in case the device initialization was successful
+	Use it once in your program at the setup
+* audio.destroy()
+	closes audio device and terminates playback
+	Returns:
+		true in case the device was successfully closed
+	Use it once in your program at the cleanup
+* audio.loaderAvailable( suffix )
+	returns true in case a loader for this file type is available
+* audio.volume( left, [ right ] )
+	sets master volume, either for both channels uniformly, or individually
+* audio.sleep( seconds )
+	Suspends the execution of the current thread for a definable number of seconds. 
+	Note that audio mixing and playback runs in its own background thread and is 
+	therefore not affected by this auxiliary call.
+* audio.sampleFromFile( filename, volume = 1.0 )
+	loads a sound sample from file, optionally adjusts volume, returns handle
+* audio.sampleFromMemory( data, sampleRate )
+	converts an array of numeric data into a sound sample having the defined sample rate, 
+	returns handle
+* audio.sampleDestroy( sample )
+	deletes a previously created sound sample resource identified by its handle
+	duration, channels, sampleRate, bitsPerSample = proAudio.sampleProperties ( sample )
+	returns properties of a sample identified by its handle
+* audio.soundActive()
+	returns number of currently active sounds
+* audio.soundLoop( sample, volumeL = 1.0, volumeR = 1.0, disparity = 0.0, pitch = 1.0 )
+	plays a specified sound sample continuously and sets its parameters
+	Parameters:
+	-   sample 	handle of a previously loaded sample
+	-   volumeL 	(optional) left volume
+	-   volumeR 	(optional) right volume
+	-   disparity 	(optional) time difference between left and right channel in seconds. 
+		Use negative values to specify a delay for the left channel, positive for the right.
+	-   pitch 		(optional) pitch factor for playback. 0.5 corresponds to one octave below, 
+		2.0 to one above the original sample.
+	Returns:
+		a handle to the currently played sound or -1 in case of error 
+* audio.soundPlay( sample, volumeL = 1.0, volumeR = 1.0, disparity = 0.0, pitch = 1.0 )
+	plays a specified sound sample once and sets its parameters
+	Parameters:
+	-   sample 	handle of a previously loaded sample
+	-   volumeL 	(optional) left volume
+	-   volumeR 	(optional) right volume
+	-   disparity 	(optional) time difference between left and right channel in seconds. 
+		Use negative values to specify a delay for the left channel, positive for the right.
+	-   pitch 		(optional) pitch factor for playback. 0.5 corresponds to one octave below, 
+		2.0 to one above the original sample.
+	Returns:
+		a handle to the currently played sound or -1 in case of error 
+* audio.soundStop( [ sound ] ) 
+	stops a specified sound immediately, if a sound handle is passed, or stops all sounds
+* audio.soundUpdate( sound, volumeL, volumeR, disparity = 0.0, pitch = 1.0 )
+	updates parameters of a specified sound
+	Parameters:
+	-   sound 	handle of a currently active sound
+	-   volumeL 	left volume
+	-   volumeR 	right volume
+	-   disparity 	(optional) time difference between left and right channel in seconds. 
+		Use negative values to specify a delay for the left channel, positive for the right.
+	-   pitch 		(optional) pitch factor for playback. 0.5 corresponds to one octave below, 
+		2.0 to one above the original sample.
+	Returns:
+		true in case the parameters have been updated successfully 
+------------------------------------------------------------------------------
+Simple physics
+<TDB>
