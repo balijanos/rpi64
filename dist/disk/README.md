@@ -1,1 +1,1 @@
-RPI-64 virtaul disks
+RPI-64 virtual disks
